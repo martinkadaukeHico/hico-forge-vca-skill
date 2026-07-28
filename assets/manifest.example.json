@@ -1,0 +1,29 @@
+{
+  "app": "myapp",
+  "manifest_version": 1,
+  "sources": [
+    {
+      "key": "ai",
+      "label": "AI (via Vault broker)",
+      "kind": "secret_group",
+      "access": "proxy",
+      "required": true,
+      "fields": [],
+      "note": "Jobs used: <list job names here> (see README for details)"
+    },
+    {
+      "key": "crm",
+      "label": "Odoo CRM (XML-RPC)",
+      "kind": "connection",
+      "access": "value",
+      "required": false,
+      "fields": [
+        { "key": "url", "type": "url", "required": true },
+        { "key": "db", "type": "string", "required": true },
+        { "key": "username", "type": "string", "required": true },
+        { "key": "api_key", "type": "secret", "secret": true, "required": true }
+      ],
+      "note": "DELETE this source if the app doesn't actually use a CRM. This is here as a `value`-access example only."
+    }
+  ]
+}

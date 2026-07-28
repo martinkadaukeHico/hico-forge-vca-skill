@@ -1,0 +1,7 @@
+# Keep everything LF in the working tree, not just in the repo.
+# core.autocrlf=true on Windows would otherwise hand out CRLF copies, which
+# breaks scripts/compliance_check.sh when it is run under bash.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary
