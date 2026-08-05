@@ -13,9 +13,9 @@ The reason this skill exists: an app built without these rules gets rewritten be
 
 1. **Read `references/vca-master-prompt.md` now**, in full — don't skim it. It's the actual spec; this SKILL.md is just the entry point and workflow around it.
 2. **Sanity-check the app idea against §1 (golden rules) and §2 before writing anything.** A few conflicts come up constantly — catch them now, not after half the app is built:
-   - Does it need to know *which person* is acting (per-user data, approvals, an audit trail naming people)? There is no per-user identity available to a VCA yet (§1 rule 7) — flag this to the user and ask whether a shared/team-context design is acceptable, rather than quietly building a login screen.
+   - Does it need to know *which person* is acting (per-user data, approvals, an audit trail naming people)? Read §1 rule 7 carefully, because it conflates two different things. **"The app must not OWN identity" is a permanent rule.** "No identity is available to the app" is a temporary fact about today's platform. So: never build a login screen, a user table, password handling, or role storage — that stays absolutely forbidden. But *borrowing* who-is-acting from Forge, the same way the app already borrows AI and credentials, is the sanctioned direction. Until Forge ships identity lending, build the seam and run on a shared team context with a visible banner saying so — see "The identity seam" below. Flag the limitation to the user; don't quietly design around it either by faking a login or by pretending the app never needs to know.
    - Does it depend on anything that only exists on someone's desktop (local Outlook, local files, a USB device, a locally-installed CLI)? Device-local resources don't exist in Forge (§2) — flag it and propose a server-side equivalent, or say the idea isn't Forge-compatible as described.
-   - Does it want the model to browse, search, or take actions ("agentic" AI)? The broker is plain chat completions only (§5.3) — flag it rather than faking it with loops of completions.
+   - Does it want the model to browse, search, or take actions ("agentic" AI)? The broker is plain chat completions only (§5.3) — flag it rather than faking it with loops of completions. **This is narrower than it first reads, and reading it too broadly is the more common mistake.** What is forbidden is a loop in which *the model* decides what to do next. What is positively encouraged is deterministic orchestration *around* single completions: your code gathers the context, calls the broker once, parses the reply, applies the result, and decides in code whether another call is warranted. A feature that makes twenty completions is perfectly compliant if your code chose all twenty. If you find yourself thinking "any multi-step AI feature is banned, so I'll either give up or quietly build an agent" — both of those are wrong. Write the loop in Python.
    - Does it need a live external system (CRM, mailbox, another API)? You'll need that *system's real API docs* before writing the client for it (§4) — ask the user for them rather than guessing at endpoints and payload shapes. A guessed integration looks done and is actually broken.
    If the idea conflicts with a rule, say so and propose a compliant alternative out loud — never quietly build the noncompliant version because it's easier or the user didn't ask about Vault specifically.
 3. **Scaffold the repo per §3's layout.** Copy the reference implementations in `assets/backend/` into the new repo's `backend/` directory as your starting point rather than writing `vault_client.py` and `vault_mock.py` from scratch — they already encode the retry/error/status-code rules from §5.2 and §6 correctly, including the easy-to-get-wrong bits (retry once on 502 and never on 429, `VaultConfigError` vs. plain `VaultError`, mock refusing to start in prod). Adapt `assets/backend/ai_jobs.py` and `assets/manifest.example.json` to the app's actual jobs and sources — don't ship the placeholders as-is.
@@ -53,6 +53,48 @@ Then walk the checklist in §11 of the reference doc — most of it isn't grep-a
 
 Finish by producing `HANDOFF.md` per §12 — the app name/owner, the final `manifest.json`, the AI jobs table, an estimated AI budget, container details, and any identity/auth gaps or unconfirmed integration shapes flagged along the way. If the owner or usage volume genuinely isn't known yet, say so explicitly and give a labeled estimate rather than leaving it blank or making up a precise-looking number.
 
+## Patterns that keep coming up
+
+These are the recipes a compliant VCA needs over and over. They are not in the master prompt — it says *what* the rules are, not how to satisfy them in practice. Reach for these before inventing your own; `hico-pmo` (see "Reference implementation") is a working example of every one.
+
+### Never let the model report its own work
+
+The single most common request is "have the AI change this, and show me what it changed." Do **not** ask the model to describe its edits — it will sometimes claim a change it didn't make, or miss one it did, and the user has no way to tell.
+
+Keep two copies of the data: `baseline` (exactly what the external system last told you) and `working` (baseline + AI proposals + human edits). Compute the difference in code, and highlight *that*. The model supplies content; your code decides what counts as a change. It then cannot lie about it, because it was never asked.
+
+The same shape covers "review before it goes live": all edits land in `working`, the external system is untouched until a human presses Commit, and every drag or AI suggestion is therefore reversible for free.
+
+### Getting structured data out of a plain-completion broker
+
+There is no JSON mode and no function calling (§5.3). Use §5.4: ask for fixed `key: value` lines, one per line, and parse defensively — ignore unknown keys, treat a missing key as "human must fill this in", allow a key to repeat where you want a list. This degrades far better than JSON, which fails wholesale the moment the model wraps it in prose or a code fence.
+
+For anything with a fixed set of answers (a category, a severity, a yes/no), define the closed set in your `ai_jobs.py`, ask for exactly one word, and match it exactly. Anything else becomes an explicit `unknown` that the UI shows as needs-review. **Never** map an unrecognised answer onto your best guess, and never retry in a loop hoping for a compliant answer.
+
+### Make the mock prove something
+
+§7 mock mode is not decoration — it is how the app gets built and demoed before anyone registers it in Forge. A mock that always returns the same canned string will pass a click-through and hide every real bug.
+
+Make canned answers *about the input*: read the `key: value` lines your own prompt put into the message and echo them back. Make the mock exercise the interesting branches — if you have a closed-set classifier, the mock should be able to return each label, not just the happy one. If the external system can legitimately refuse something (a workflow that forbids a status change, a validation error), make the mock refuse it too, so the error path is exercisable offline. Note the one exception in §7 rule 5: closed-set replies must be the **bare** label, with no `[MOCK]` prefix, or your own exact-match parser fails on every mocked classification.
+
+### Surface partial failure, always
+
+When you push several changes to an external system, some can succeed and some can fail. Return and display the outcome **per item**. A UI that says "committed" while one card was silently refused is worse than one that fails loudly — the user walks away believing something happened that didn't.
+
+Related: when you re-sync local state after a partial commit, do it per item too. Re-baseline what landed and leave what failed marked as outstanding. All-or-nothing re-baselining either re-sends work the system already accepted, or leaves accepted work looking uncommitted forever.
+
+### Idempotency, when a link can be opened twice
+
+If a workflow mails or posts a link into your app, assume it will be clicked repeatedly, by several people, days apart. Anything the app does on arrival must be safe to do twice.
+
+Watch for state that lives in the wrong place: if you track "already handled" only in data pulled from the external system, a fresh pull wipes it and the work repeats. Keep that record in the app's own `/data` store, keyed by the source record's id, and write it only once the external system has actually accepted the result.
+
+### The identity seam
+
+Until Forge lends identity, put a single `backend/identity.py` chokepoint in front of "who is acting", have it return a shared team context, and show a banner saying exactly that and why. Every feature that will one day be per-user calls that one function. When Forge ships identity lending, one file changes.
+
+Do not scatter `current_user()`-ish logic through the app, and do not skip the banner — a shared context presented as if it were a real user is the dishonest version of this.
+
 ## Practical defaults where the reference doc is silent
 
 The master prompt is thorough but leaves a few implementation details genuinely open — not gaps to flag to the platform team, just places where any reasonable choice is compliant and it helps to pick the same one every time so apps built by different people stay consistent. These are suggestions, not rules from §1–12; if a specific app has a good reason to do something else, that's fine.
@@ -64,6 +106,20 @@ The master prompt is thorough but leaves a few implementation details genuinely 
 - **A VCA whose entire value is one or two AI actions is allowed to degrade to an empty shell (form present, buttons disabled, banner shown) when AI is denied.** §5.1's "everything else stays fully usable" language reads naturally for apps with an unrelated non-AI feature to fall back to; a pure-AI-utility app doesn't have one, and that's fine — don't invent filler functionality just to have something to degrade to.
 - **Route naming:** prefer `/api/actions/<job-name-with-dashes>` (e.g. `/api/actions/draft-reply` for the `draft_reply` job) for anything that triggers an AI job. Not mandated by §3 (which only requires `/api/*`), but keeps routes predictable across apps.
 - **If this skill or `references/vca-master-prompt.md` gets updated to a new version, re-run step 4** (recopy the reference doc over each app's `CLAUDE.md`) for any in-flight repos — a `CLAUDE.md` copied from v1.1 doesn't update itself when the live doc reaches v1.2.
+
+## Reference implementation
+
+`hico-pmo` (Martin Kadauke's PMO app) is the first app built against these rules from the first commit. It is worth reading when a rule is clear but its application isn't: it has a real external-system client written from published API docs, the baseline/working diff pattern, closed-set parsing with an explicit unknown state, per-item commit outcomes including upstream refusals, a mock that exercises the failure branches, and the identity seam running in shared-context mode with the banner.
+
+It is a reference, not scripture — it also carries a `docs/PLATFORM-TODOS.md` listing where it is deliberately incomplete because the platform isn't there yet. Copying that habit is more useful than copying any particular file: when you build against a capability Forge doesn't have, write down the seam, the assumption, and who owns closing it.
+
+## Proposed extensions not yet in the master prompt
+
+These came out of building `hico-pmo` and are **not** v1.1 rules. If your app needs one, follow the pattern below and flag it to the platform team rather than assuming it is sanctioned.
+
+- **`access: value_user`** — a source whose values are stored per user in their own Vault profile (e.g. each consultant's own Odoo API key) rather than once by the admin. The admin grants the *capability*; each user supplies their own *values*. This is not the same as `oauth_delegated`, which is per-user consent to a third-party OAuth flow; this is a per-user stored secret. Depends on identity lending, so it resolves `pending` today and every feature using it must disable itself. If you use it: never cache a resolved per-user value under a key that isn't scoped to that user.
+- **Identity introspection** — see "The identity seam" above. Build the seam now, consume the capability when it exists.
+- **Brokered outbound mail and click-tracked links** — several PMO-ish apps will want "email someone a link and record whether they opened it." Declaring SMTP as a `value` source works but puts mail credentials in an app, which is against the spirit of rule 1. A Vault mail broker (like the AI broker) is the better answer. Until that's decided, say which you did and why.
 
 ## If something doesn't fit this document
 
