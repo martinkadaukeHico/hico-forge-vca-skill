@@ -65,6 +65,21 @@ Keep two copies of the data: `baseline` (exactly what the external system last t
 
 The same shape covers "review before it goes live": all edits land in `working`, the external system is untouched until a human presses Commit, and every drag or AI suggestion is therefore reversible for free.
 
+### "Do this across everything" without an agent loop
+
+The request that most often gets mistaken for needing an agent is a bulk one: *"every ticket about X needs Y"*, *"reply to all the unanswered ones"*, *"tidy up the stale entries"*. It feels agentic because the model appears to be choosing what to act on.
+
+It isn't. Split it into two ordinary completions with your code in charge of both:
+
+1. **Ask once what the instruction is about.** Give the model the candidate list and require an answer drawn from it — `item: <ID>` lines, IDs only, no prose. This is a closed set (§5.4): the candidates *are* the allowed vocabulary.
+2. **Validate that answer against reality.** An ID the model invented gets dropped, never fuzzy-matched onto something that looks similar — matching a hallucinated ID to a real record is how a bulk action quietly hits the wrong thing.
+3. **Cap how many items one instruction may touch**, and *say so* when the cap bites. The cap is not protection against the model; it's protection against a human typing something vague and rewriting half a dataset in one click. Silent truncation reads as "it did everything."
+4. **Run your existing single-item job on each survivor**, collecting per-item outcomes.
+
+The model answered one bounded question. Your code decided the rest. That's compliant, and it's also just better — you can log which items were selected and why, which no agent loop gives you.
+
+The same skeleton covers "which of these does the user mean?" generally. Whenever you're tempted to let the model drive a sequence, ask what single question you'd need answered to drive it yourself.
+
 ### Getting structured data out of a plain-completion broker
 
 There is no JSON mode and no function calling (§5.3). Use §5.4: ask for fixed `key: value` lines, one per line, and parse defensively — ignore unknown keys, treat a missing key as "human must fill this in", allow a key to repeat where you want a list. This degrades far better than JSON, which fails wholesale the moment the model wraps it in prose or a code fence.
