@@ -19,7 +19,7 @@ The reason this skill exists: an app built without these rules gets rewritten be
    - Does it need a live external system (CRM, mailbox, another API)? You'll need that *system's real API docs* before writing the client for it (§4) — ask the user for them rather than guessing at endpoints and payload shapes. A guessed integration looks done and is actually broken.
    If the idea conflicts with a rule, say so and propose a compliant alternative out loud — never quietly build the noncompliant version because it's easier or the user didn't ask about Vault specifically.
 3. **Scaffold the repo per §3's layout.** Copy the reference implementations in `assets/backend/` into the new repo's `backend/` directory as your starting point rather than writing `vault_client.py` and `vault_mock.py` from scratch — they already encode the retry/error/status-code rules from §5.2 and §6 correctly, including the easy-to-get-wrong bits (retry once on 502 and never on 429, `VaultConfigError` vs. plain `VaultError`, mock refusing to start in prod). Adapt `assets/backend/ai_jobs.py` and `assets/manifest.example.json` to the app's actual jobs and sources — don't ship the placeholders as-is.
-4. **Write `CLAUDE.md` in the new repo's root as a copy of `references/vca-master-prompt.md`.** This is what makes the rules durable across sessions: the next time Claude Code (yours or a colleague's) opens this repo, it reads `CLAUDE.md` automatically and inherits the same constraints, even without this skill triggering again.
+4. **Write `CLAUDE.md` in the new repo's root as a byte-for-byte copy of `references/vca-master-prompt.md`.** This is what makes the rules durable across sessions: the next time Claude Code (yours or a colleague's) opens this repo, it reads `CLAUDE.md` automatically and inherits the same constraints, even without this skill triggering again. **Copy it verbatim — do not summarise it, do not replace its inline code listings with pointers to this skill's `assets/`.** The new repo does not contain this skill, so a pointer to `assets/backend/vault_client.py` is a dangling reference for everyone who opens that repo later. `references/vca-master-prompt.md` is kept identical to the platform team's `vault/docs/forge-vca-master-prompt.md` precisely so this copy is safe.
 5. Build the app. Keep coming back to §§4–10 as you add each piece — the manifest schema, the `/resolve` and AI-broker contracts, the required endpoints (§8), and the forbidden list (§10) are the parts most likely to matter for any given feature.
 
 ## When you're mid-build, or resuming someone else's app
@@ -86,6 +86,23 @@ There is no JSON mode and no function calling (§5.3). Use §5.4: ask for fixed 
 
 For anything with a fixed set of answers (a category, a severity, a yes/no), define the closed set in your `ai_jobs.py`, ask for exactly one word, and match it exactly. Anything else becomes an explicit `unknown` that the UI shows as needs-review. **Never** map an unrecognised answer onto your best guess, and never retry in a loop hoping for a compliant answer.
 
+### The mock stands in for the system, never for Vault's decision
+
+A subtle one that is easy to get backwards and hard to notice. When you build the factory that returns a client for a source, it is natural to write:
+
+```python
+if mock:
+    return MockThing()          # WRONG ORDER
+if not granted.get("thing"):
+    return None
+```
+
+That makes `VAULT_MOCK_DENIED=thing` hand back a perfectly working client, because mock short-circuits before the grant is ever consulted — so the §5.1 degraded state is unreachable offline, which is exactly what §7 rule 4 exists to prevent. Check the grant **first**, then decide whether the client is real or mocked.
+
+The same mistake in a different costume: gating a feature on *"did I manage to build a client?"* instead of on *the source's state*. A source can be in `granted` **and** in `missing_required` at the same time — granted in principle, unusable in practice because the admin has not filled a required field. A client-only check sails straight past that and fails later with a confusing upstream error instead of showing "Awaiting configuration in HICO Vault".
+
+Both bugs are invisible to code review and obvious the moment you actually run the app with the degraded env vars set. Which is why §11 says to run them.
+
 ### Make the mock prove something
 
 §7 mock mode is not decoration — it is how the app gets built and demoed before anyone registers it in Forge. A mock that always returns the same canned string will pass a click-through and hide every real bug.
@@ -131,6 +148,8 @@ It is a reference, not scripture — it also carries a `docs/PLATFORM-TODOS.md` 
 ## Proposed extensions not yet in the master prompt
 
 These came out of building `hico-pmo` and are **not** v1.1 rules. If your app needs one, follow the pattern below and flag it to the platform team rather than assuming it is sanctioned.
+
+**Do not put a proposed extension in a shipped `manifest.json`.** The manifest is ingested by Forge and validated against the v1.1 schema; an invented `access` value or `kind` makes the whole file unregisterable, and the failure surfaces at the worst possible moment — when the admin is trying to register your app. Keep proposals in `docs/PLATFORM-TODOS.md` and declare only what the schema allows. This bites harder than it sounds, because §4 also says the manifest must describe **the app you actually built**: a source you have not written code for yet should not be in there at all, whatever its `access` mode. Declaring it early just asks the admin to enter credentials for something that does not exist.
 
 - **`access: value_user`** — a source whose values are stored per user in their own Vault profile (e.g. each consultant's own Odoo API key) rather than once by the admin. The admin grants the *capability*; each user supplies their own *values*. This is not the same as `oauth_delegated`, which is per-user consent to a third-party OAuth flow; this is a per-user stored secret. Depends on identity lending, so it resolves `pending` today and every feature using it must disable itself. If you use it: never cache a resolved per-user value under a key that isn't scoped to that user.
 - **Identity introspection** — see "The identity seam" above. Build the seam now, consume the capability when it exists.
