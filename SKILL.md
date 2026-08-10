@@ -145,6 +145,31 @@ The master prompt is thorough but leaves a few implementation details genuinely 
 
 It is a reference, not scripture — it also carries a `docs/PLATFORM-TODOS.md` listing where it is deliberately incomplete because the platform isn't there yet. Copying that habit is more useful than copying any particular file: when you build against a capability Forge doesn't have, write down the seam, the assumption, and who owns closing it.
 
+## Testing against a real system before the app is registered
+
+Every VCA hits this wall in its first week: the mock proves the UI, but it cannot prove that your Jira/Odoo/CRM request shapes are right, and §11 explicitly asks whether they are. Meanwhile §10 forbids "a local fallback that works without Vault", and Vault has not issued the app a key yet. Read strictly, there is no way to ever make the first real call.
+
+**Do not resolve this by pasting a credential into the app.** Not into `vault_mock.py`, not into `.env`, not into an env var — that is precisely the secret-smuggling path this platform exists to close, and an app that ever worked that way tends to keep a quiet code path that still does.
+
+**The sanctioned route is to ask for a scoped dev grant, in-band.** The app requests it; a Vault admin approves it in Forge; Vault issues a short-lived key limited to what was asked for. The request is made from the app so it carries the app's own manifest and identity, and so the trail lives where every other grant decision lives.
+
+What the request must carry, because an admin cannot approve what they cannot evaluate:
+
+- **which source** and **which operations** — read-only, or writes too
+- **the blast radius**: the specific project / board / mailbox / dataset it may touch, never "Jira"
+- **why**, in a sentence a non-developer can judge: what is being built and what the mock cannot prove
+- **how long** — dev grants expire; a grant with no end date is a permanent grant with extra steps
+- **a proposed slot to talk it through**, so approval is a conversation when it needs to be and one click when it does not
+
+Then, while you wait — and this is the part people skip — **keep building against the mock**. A dev grant is for verifying request shapes, not for developing against. If the feature only works once the real system is wired, the mock was too thin (see "Make the mock prove something").
+
+Two rules that stay true even with a dev grant in hand:
+
+- **Scope writes in the app as well.** A grant that permits writing to one project should be matched by an allowlist in the code, checked at the last line before the request is built. Approval and enforcement are different things, and the one that saves you is the one nearest the HTTP call.
+- **Mark anything the app generates** so it can be swept up — a title prefix, a label, whatever the system supports. Apply it on update as well as create, or the first AI-rewritten title quietly loses it.
+
+Until Forge ships this, whatever you do instead is a **deviation**: keep it in one file, keep it out of git, have `/api/vault/status` report it so the UI cannot claim mock mode while talking to a live system, and write it down as a platform TODO. `hico-pmo` does exactly that — see its `docs/PLATFORM-TODOS.md` F-7 for the shape and for the request contract being proposed to the platform team.
+
 ## Proposed extensions not yet in the master prompt
 
 These came out of building `hico-pmo` and are **not** v1.1 rules. If your app needs one, follow the pattern below and flag it to the platform team rather than assuming it is sanctioned.
