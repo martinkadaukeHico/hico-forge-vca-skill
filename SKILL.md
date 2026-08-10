@@ -107,6 +107,10 @@ Both bugs are invisible to code review and obvious the moment you actually run t
 
 §7 mock mode is not decoration — it is how the app gets built and demoed before anyone registers it in Forge. A mock that always returns the same canned string will pass a click-through and hide every real bug.
 
+**The rule that matters most: a mock must process its input.** A mock that returns the same block whatever it is asked does not just fail to test anything — it makes working features look broken, and you will spend a day debugging the wrong layer.
+
+This is not hypothetical. In `hico-pmo` the refine mock returned a fixed paragraph about an API key issuer regardless of the instruction. A user asked it to *"add an acceptance criterion: it must be compatible with the Vault functions"* and got back boilerplate about key rotation, plus a title reading "Refined from instruction". The feature was correct end to end — context assembly, parsing, diffing, commit — and it looked broken, because the one component standing in for judgement was not standing in for anything. Fixing the mock fixed the "bug".
+
 Make canned answers *about the input*: read the `key: value` lines your own prompt put into the message and echo them back. Make the mock exercise the interesting branches — if you have a closed-set classifier, the mock should be able to return each label, not just the happy one. If the external system can legitimately refuse something (a workflow that forbids a status change, a validation error), make the mock refuse it too, so the error path is exercisable offline. Note the one exception in §7 rule 5: closed-set replies must be the **bare** label, with no `[MOCK]` prefix, or your own exact-match parser fails on every mocked classification.
 
 ### Surface partial failure, always
@@ -150,6 +154,33 @@ It is a reference, not scripture — it also carries a `docs/PLATFORM-TODOS.md` 
 Every VCA hits this wall in its first week: the mock proves the UI, but it cannot prove that your Jira/Odoo/CRM request shapes are right, and §11 explicitly asks whether they are. Meanwhile §10 forbids "a local fallback that works without Vault", and Vault has not issued the app a key yet. Read strictly, there is no way to ever make the first real call.
 
 **Do not resolve this by pasting a credential into the app.** Not into `vault_mock.py`, not into `.env`, not into an env var — that is precisely the secret-smuggling path this platform exists to close, and an app that ever worked that way tends to keep a quiet code path that still does.
+
+### The distinction that decides what you may do: `value` vs `proxy`
+
+These two are not the same problem and must not get the same answer.
+
+**`value` sources** — a database, Odoo, a CRM, SMTP, Jira. Vault hands the app real values *by design* (§5.1). Supplying them early from a local file is the same **kind** of thing Vault will do later, just sooner and with less ceremony. That is a defensible gap-filler if you keep it narrow: gitignored file, never an env var, reported by `/api/vault/status` so the UI cannot claim mock mode while talking to a live system, and writes constrained by an allowlist in the app.
+
+**`proxy` sources — which today means AI** — are the exact opposite, and there is **no version of this that is acceptable**. AI is `proxy` *precisely so the app never receives the provider key*. That single fact is what makes budget, metering, audit and job→model governance possible. An app holding a provider key is not "the same thing early"; it is the arrangement the entire platform exists to prevent, wearing a dev-mode hat. It also silently breaks §1 rules 1–3 and §10 at once.
+
+The tempting argument is always *"just for testing, just once, it never ships"*. It does ship — not the key, the **code path**. It stays in the repo, and the next person under deadline pressure finds it and uses it.
+
+So:
+
+| | may you supply it locally before Vault exists? |
+|---|---|
+| `value` (DB, CRM, mail, tickets) | yes, narrowly, documented, expiring — see above |
+| `proxy` (AI) | **no.** Not once, not behind a flag, not in the mock |
+
+**Enforce it in code, not in a rule someone has to remember.** If your app has a dev-credential path at all, make it refuse `proxy` sources outright and say so loudly — a silently ignored key looks like a bug and invites someone to "fix" it by removing the guard. `hico-pmo` does this in `vault_mock.py` (`_NEVER_DEV_DIRECT`), with the reasoning in a comment so the next reader does not have to reconstruct it.
+
+### What that means for you in practice
+
+Until a dev broker exists, **the quality of your AI output is untested, and you should say so out loud.** Mock mode proves the *shape*: that you parse the reply, honour the closed set, handle 429, degrade when the source is withdrawn. It cannot prove the *substance* — whether the prompt actually produces a usable answer.
+
+That is an honest project status, not a failure. What is dishonest is demoing a keyword mock and saying "the AI suggested this". People find out, and when they do they stop believing the parts that were true.
+
+The lawful way to close that gap is a **dev key that still goes through the broker** — same endpoint, capped budget, mandatory expiry, named jobs. A concrete proposal for the platform team is written up in `hico-pmo`'s `docs/proposals/vault-dev-broker.md`; if you hit this wall, point them at it rather than inventing a fourth way around.
 
 **The sanctioned route is to ask for a scoped dev grant, in-band.** The app requests it; a Vault admin approves it in Forge; Vault issues a short-lived key limited to what was asked for. The request is made from the app so it carries the app's own manifest and identity, and so the trail lives where every other grant decision lives.
 
