@@ -131,11 +131,32 @@ Until Forge lends identity, put a single `backend/identity.py` chokepoint in fro
 
 Do not scatter `current_user()`-ish logic through the app, and do not skip the banner — a shared context presented as if it were a real user is the dishonest version of this.
 
+### Being embeddable: give the app a `.env` with both `VAULT_API_KEY` and `FRAME_ANCESTORS`
+
+Vault renders its VCAs in an iframe, so an app that cannot be framed is an app nobody can open. Two rules, both learned by embedding `hico-pmo` in a local Vault and watching it fail.
+
+**1. Write a gitignored `.env` holding both deployment values, and have `docker-compose.yml` read them with `${VAULT_API_KEY}` / `${FRAME_ANCESTORS}`.** This is a platform expectation, not a preference: the origin list is per-deployment, and one of the two values is a credential. Keeping both in `.env` is what lets the committed compose file carry neither a secret nor an environment-specific hostname. Give the file comments saying what each value is for — the next person to hit a blocked iframe finds the fix there.
+
+**`FRAME_ANCESTORS` is needed in dev, too.** The master prompt's env table marks it prod/stage, which reads as "dev can skip it" — dev cannot. The moment a local Vault embeds your local app, the default `'self'` blocks it, because a different port is a different origin. List every Vault origin that will render the app (its API, its consoles, the monorepo shell), space-separated and unquoted.
+
+**2. Send `Cache-Control: no-cache` on the SPA shell.** Skip this and a corrected `FRAME_ANCESTORS` will not reach the browser: `FileResponse`-style handlers send only `etag`/`last-modified`, browsers then apply *heuristic* freshness (a fraction of the file's age), and a cached response replays its **headers** along with its body. So the browser keeps enforcing the CSP it stored hours ago, and your fix appears to do nothing. This cost real debugging time on `hico-pmo` — the server was already correct and the console was quoting a dead header. The same staleness also makes a rebuilt app reference hashed asset files that no longer exist. Hashed `/assets/*` are the opposite case: immutable by name, so let them cache.
+
+**Verify in this order**, because each step clears a different layer:
+
+1. `curl -D -` the **framed document** (`/`), not `/health` — the shell is what carries the CSP the browser enforces. Confirm the origin list and `cache-control`.
+2. Read the browser console. The violation message quotes *the policy actually being enforced*. If it still says `frame-ancestors 'self'` after you fixed the env, you are looking at a cached response — hard-reload with cache disabled — not at a config problem. That one distinction is the whole debugging shortcut.
+3. Frame it from an origin that is **not** on the list and confirm it is still refused, so you know you tightened something rather than opening it up. Do not trust an in-page JS probe for this: a blocked frame and a legitimately cross-origin one look alike from script (both give an unreadable document). The console is the reliable oracle.
+
 ## Practical defaults where the reference doc is silent
 
 The master prompt is thorough but leaves a few implementation details genuinely open — not gaps to flag to the platform team, just places where any reasonable choice is compliant and it helps to pick the same one every time so apps built by different people stay consistent. These are suggestions, not rules from §1–12; if a specific app has a good reason to do something else, that's fine.
 
-- **Vault unreachable, or a source in none of granted/pending/denied/missing_required** (this happens right after a failed `/resolve`): show something like "HICO Vault is unreachable right now" — distinct from the §5.1 wording for pending/denied/missing_required, so a user or admin can tell "Vault said no" apart from "we couldn't reach Vault at all."
+- **Keep "Vault is unreachable" and "Vault has never heard of this source" as two different states.** They look identical in the §5.1 payload and they need opposite reactions, so decide by *whether `/resolve` itself succeeded*, never by the lists being empty:
+  - `/resolve` **failed** → *unreachable*: "HICO Vault is unreachable right now". Nothing works; someone should check the URL, the key, the network.
+  - `/resolve` **succeeded** but the source is in none of `granted`/`pending`/`denied`/`missing_required` → *not declared*: say the manifest needs ingesting and the source granting. Everything else about the app is fine.
+
+  This is the **normal state of a freshly registered app** — verified against a real Vault, which answers `{"app":"…","granted":{},"denied":[],"pending":[],"missing_required":[]}` until an admin ingests the manifest. Treating that as "unreachable" (as this skill previously advised) sends someone to debug networking while Vault is demonstrably answering; the actual fix is an admin action. Name the next action in the message.
+- **Check `missing_required` as an override, not a peer.** The four §5.1 lists are not mutually exclusive: a source can be in `granted` *and* named in `missing_required` — present but not yet usable. Test `granted` last, or test `missing_required` inside the granted branch. Getting the order wrong reports a half-configured source as ready and fails later with a confusing upstream error.
 - **Before calling `ai_invoke` for a given job, check the cached grant state for that source first** (is it in `granted` and not in `missing_required`?) rather than always attempting the call and relying on Vault's own 401/403 to reveal the same thing. It reads more naturally as "the feature disables itself" (§5.1) and doesn't burn a rate-limited request on a call that's already known to fail.
 - **Cache `/resolve` with a short TTL (a few seconds to a minute) rather than re-fetching on every hit to `/api/vault/status`.** The doc says "refresh on demand" but doesn't forbid a frontend from polling status every few seconds — without a TTL that turns into continuous hammering of `/resolve`.
 - **An app with no local state at all still gets an empty `/data` per §3** (created by the Dockerfile, not by app code) — it just never opens a SQLite connection. Say so plainly in the README rather than leaving it to look like an oversight.
