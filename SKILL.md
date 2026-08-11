@@ -131,6 +131,26 @@ Until Forge lends identity, put a single `backend/identity.py` chokepoint in fro
 
 Do not scatter `current_user()`-ish logic through the app, and do not skip the banner — a shared context presented as if it were a real user is the dishonest version of this.
 
+### Serving the manifest so Vault can fetch it
+
+Forge has a **"fetch manifest"** action (`POST /api/v1/apps/{app_id}/manifest/pull`) that makes Vault fetch `GET /api/vault/manifest` from your app. It is live today — the master prompt still describes pulling as a future feature and pasting as the current one, which is out of date. Treat serving that endpoint as load-bearing, not as future-proofing: a wrong or stale response now breaks registration rather than merely being untidy.
+
+Four things decide whether the fetch succeeds:
+
+- **Serve `manifest.json` verbatim, by reading the file.** Never hand-build the JSON in Python. A second copy drifts, and the drift surfaces while an admin is trying to register your app.
+- **Leave it unauthenticated.** Vault fetches it *before* your app has any grants, and the manifest is secret-free by construction (§4), so there is nothing to protect. Putting a key in front of it deadlocks registration.
+- **The URL must resolve from Vault's network, not from your browser.** This is the one that actually bites in local dev: with Vault in Docker and the app on a host port, `http://localhost:<port>` is **refused** from inside the Vault container — verified, not theoretical. Use `http://host.docker.internal:<port>`. The confusing part is that the app is demonstrably fine in your browser at the same moment the fetch fails.
+- **Expect the embed URL and the fetch URL to differ**, and check whether Forge stores them as one field. The iframe is loaded by the *browser* (`http://localhost:8123`); the manifest is fetched by the *Vault container* (`http://host.docker.internal:8123`). One value cannot satisfy both in a local Docker setup.
+
+Verify from inside Vault rather than from your shell, because only one of them is the client that matters:
+
+```sh
+docker exec <vault-container> python -c \
+  "import urllib.request;print(urllib.request.urlopen('http://host.docker.internal:8123/api/vault/manifest',timeout=5).status)"
+```
+
+A pulled manifest goes through the same validation and ingest path as a pasted one, and newly declared sources land `pending` — so a successful fetch is the start of the grant flow, not the end of it. Expect `/resolve` to keep reporting *not declared* until an admin grants each source.
+
 ### Being embeddable: give the app a `.env` with both `VAULT_API_KEY` and `FRAME_ANCESTORS`
 
 Vault renders its VCAs in an iframe, so an app that cannot be framed is an app nobody can open. Two rules, both learned by embedding `hico-pmo` in a local Vault and watching it fail.
