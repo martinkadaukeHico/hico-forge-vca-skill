@@ -131,6 +131,47 @@ Until Forge lends identity, put a single `backend/identity.py` chokepoint in fro
 
 Do not scatter `current_user()`-ish logic through the app, and do not skip the banner — a shared context presented as if it were a real user is the dishonest version of this.
 
+### Write the manifest for the admin who has to fill it in
+
+The manifest is not documentation of your app — it is the **form a Vault admin fills in without you in the room**. Judge every field by one test: *could someone who has never seen your code, and has never opened the third-party system, get this value on their own?* If not, the field is wrong however accurate it is.
+
+The counter-example is from `hico-pmo`, and it stalled a real admin: a required field labelled **"Data table id of the meeting intent log"**. Accurate, and unanswerable — which table? found where? what breaks without it? Configuring the app meant messaging its developer, which is precisely what the manifest exists to prevent.
+
+Every field carries four things, and each does a different job:
+
+| | answers | example |
+|---|---|---|
+| `label` | what is this? | "n8n Data Table holding the meeting intent log" |
+| `placeholder` | what shape? | `UkzybYYcR04TmuCN` |
+| `help` | **where do I get it?** | "In n8n, open Data Tables and pick the table the standup workflow writes into. The id is the last part of its URL." |
+| `required` | can I skip it? | — |
+
+`help` is the one that gets skipped and the one that matters. A label names a field and a placeholder shows its shape; neither tells someone where to *go and get the value*, which is the step people actually get stuck on. Write it as directions — the menu path, the URL fragment to copy — and say what the app cannot do without it.
+
+Two more rules that come from watching this fail:
+
+- **Say which values must agree.** Jira's `email` must be the account the `api_token` was created under, or auth fails as a 401 that looks like a bad token. Cross-field constraints are invisible in a form; state them in `help`.
+- **Say what the app will do with it.** "The app appends to this page when a human approves an entry" lets an admin choose the right page. Without it they pick one and find out later.
+
+For an `ai` source, list **every job** in `note` and say that each needs a model assigned — an unassigned job fails when a user tries the feature, not when the admin saves the form, so the error surfaces far from its cause.
+
+### Prove it works: `GET /api/vault/selfcheck/{source}`
+
+Serve a per-source check that **actually uses** the source and returns `{"ok": bool, "message": str}`. Vault calls it and shows the admin a verified/failed state per source.
+
+Why it has to be the app: Vault has no idea what a valid n8n data-table id is, or how to tell a working Jira token from a plausible one, and teaching it would mean new Vault code for every capability any VCA invents. You already know how to use your own sources.
+
+- **Do a real read, never a regex.** A pattern proves a value is *shaped* like a credential; it never proves it opens anything. The failure that keeps happening is a perfectly well-formed value that is simply the wrong one, and only a live call finds it.
+- **Pick the cheapest read that exercises every field.** `hico-pmo` fetches the Jira board configuration, which needs `base_url`, `email`, `api_token` *and* `board_id` in one request.
+- **Use a method your mock also implements**, so the check behaves the same offline and against the real system.
+- **For `ai`, make a real brokered call** on a tiny dedicated job. "The source is granted" and "this job has a model assigned" fail identically from the admin's screen; only an invoke separates them.
+- **Always answer 200, even for failure.** A failed check is an answer, not a server error. Return the reason and name the field to look at — `"Data table X not found on this n8n instance"` beats `"check failed"`.
+- **Never echo the value back** in the message.
+
+### Take your CSP from Vault, not from your own env
+
+`/resolve` returns `vault.frame_ancestors`, a ready-to-send CSP value. Prefer it over a hand-maintained `FRAME_ANCESTORS`, falling back to the env var when Vault is unreachable. A hand-listed set of origins rots silently, and when it does the app works perfectly in a browser tab and renders blank inside Vault — a failure that looks like anything but CSP.
+
 ### Serving the manifest so Vault can fetch it
 
 Forge has a **"fetch manifest"** action (`POST /api/v1/apps/{app_id}/manifest/pull`) that makes Vault fetch `GET /api/vault/manifest` from your app. It is live today — the master prompt still describes pulling as a future feature and pasting as the current one, which is out of date. Treat serving that endpoint as load-bearing, not as future-proofing: a wrong or stale response now breaks registration rather than merely being untidy.
