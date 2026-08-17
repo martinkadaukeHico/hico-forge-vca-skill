@@ -113,6 +113,32 @@ This is not hypothetical. In `hico-pmo` the refine mock returned a fixed paragra
 
 Make canned answers *about the input*: read the `key: value` lines your own prompt put into the message and echo them back. Make the mock exercise the interesting branches — if you have a closed-set classifier, the mock should be able to return each label, not just the happy one. If the external system can legitimately refuse something (a workflow that forbids a status change, a validation error), make the mock refuse it too, so the error path is exercisable offline. Note the one exception in §7 rule 5: closed-set replies must be the **bare** label, with no `[MOCK]` prefix, or your own exact-match parser fails on every mocked classification.
 
+### Scale the evidence bar to how hard the action is to undo
+
+When a model picks an action from a closed set, the cost of being wrong is not the same for every value, and the guard should not be either. In `hico-pmo` the same classifier can append a note, move a card, or close a ticket:
+
+| action | if wrong | bar |
+|---|---|---|
+| update | a stray paragraph on a ticket | model's answer is enough |
+| move | a card in the wrong column, visibly | model's answer, target column from a closed set |
+| close | work disappears from the board | model's answer **plus** proof the ticket was identified — its key spoken, or distinctive words shared with its title |
+
+Two rules that came out of watching this fail on real meetings:
+
+**A statement about a CLASS of things must not be applied to one of them.** *"I'll bulk-close the Testing Done tickets"* became a close on one arbitrary ticket out of twelve candidates — a ticket nobody had mentioned. The model was not wrong that a close was discussed; it was wrong that *this* ticket was the one, and nothing in the sentence could have told it which. Detect collective phrasing and hand it back to the human.
+
+**An intention to finish is not a finish.** *"I'll merge that today"* closed two tickets. Closing on Monday work that slips to Thursday makes it invisible, which is worse than leaving it open. Distinguish a *disposition* ("won't fix" — the decision is the completion), from a *report* ("Wajdi already fixed that"), from a *plan* ("I reviewed it, I'll merge it today" — the past-tense clause is about a preceding step).
+
+Both guards are deterministic and run **after** the model answers, so it cannot argue its way past them.
+
+### Say what you decided NOT to do, and why
+
+A review tool is judged on the work it hands back, so every outcome the pipeline can produce needs to reach the human as a distinct, actionable state. `hico-pmo` distinguished seven internally and displayed one — "no ticket" — for all of them. So *"I could not tell which ticket this is about"*, *"nothing needed doing"* and *"already covered by VVD3-124"* looked identical, and a careful reviewer had to re-investigate every one by hand. That is exactly the work the tool existed to save.
+
+- **Name the state in terms of what the reviewer must do**: "needs you", "nothing needed", "already covered" — not internal enum names.
+- **Give the reason next to it**, not in a tooltip. "Already covered" without saying *by what* is unverifiable, so it costs a click to check and gets skipped.
+- **Distinguish "I decided" from "I declined to decide."** Only the first is finished. A point the tool punted on stays on the reviewer's list whether or not a ticket exists.
+
 ### Surface partial failure, always
 
 When you push several changes to an external system, some can succeed and some can fail. Return and display the outcome **per item**. A UI that says "committed" while one card was silently refused is worse than one that fails loudly — the user walks away believing something happened that didn't.
@@ -130,6 +156,28 @@ Watch for state that lives in the wrong place: if you track "already handled" on
 Until Forge lends identity, put a single `backend/identity.py` chokepoint in front of "who is acting", have it return a shared team context, and show a banner saying exactly that and why. Every feature that will one day be per-user calls that one function. When Forge ships identity lending, one file changes.
 
 Do not scatter `current_user()`-ish logic through the app, and do not skip the banner — a shared context presented as if it were a real user is the dishonest version of this.
+
+### A closed set lives in more places than you think
+
+Adding a value to a closed set means changing it everywhere it is consumed, and the count is higher than it looks. In one day the same mistake shipped twice in `hico-pmo`, both times as "changed three of the four places":
+
+- A new **AI job** needs: the constant, a `manifest.json` declaration, a mock branch, and the call site. Miss the declaration and Vault never registers it, so the job has no model and fails with a 409 the moment a user presses the button — reading as a Vault misconfiguration rather than a missing line in your own file.
+- A new **action** in a classifier's closed set needs: the set, the prompt, the apply logic, and **the branch that routes to it**. Missing the last one is the dangerous case, because the value falls into whatever branch comes next and silently does the wrong thing. A `move` action that fell through to the "draft new work" branch turned *"move that ticket back to To Do"* into a **new ticket about moving a ticket**.
+
+Two habits make this class of bug impossible rather than merely unlikely:
+
+**Give every dispatch an explicit final `else` that fails loudly.** Anything unrouted becomes a visible "no handler for X" state instead of falling through to the next branch. That converts a silent wrong answer into an obvious one.
+
+**Assert the wiring in a test.** These are cheap, deterministic, and need no AI:
+
+```python
+for action in INTENT_ACTIONS:            # every value is routed
+    assert action in handled_by_main
+for job in invoked_jobs:                 # every job is declared and mocked
+    assert job in manifest_declared and job in mock_branches
+```
+
+A test that reads the source for its own routing table looks odd, and it is still the thing that catches a value added in three places out of four.
 
 ### Write the manifest for the admin who has to fill it in
 
