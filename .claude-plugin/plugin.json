@@ -1,0 +1,22 @@
+{
+  "name": "hico-skills",
+  "displayName": "HICO Group Skills",
+  "version": "1.0.0",
+  "description": "HICO's internal engineering skills for Claude Code. Currently: HICO Forge VCA compliance, which keeps any internally built web app on the Forge platform rules from the first commit instead of needing a rewrite later.",
+  "author": {
+    "name": "HICO Group",
+    "url": "https://github.com/martinkadaukeHico"
+  },
+  "homepage": "https://github.com/martinkadaukeHico/hico-forge-vca-skill",
+  "repository": "https://github.com/martinkadaukeHico/hico-forge-vca-skill",
+  "license": "UNLICENSED",
+  "keywords": [
+    "hico",
+    "forge",
+    "vault",
+    "vca",
+    "internal-tools",
+    "compliance"
+  ],
+  "skills": "./skills/"
+}
