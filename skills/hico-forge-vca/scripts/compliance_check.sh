@@ -88,10 +88,10 @@ check 6 "secrets scan (review every hit; only obvious test fixtures are acceptab
 # fires on compliant code and teaches people to rename things to dodge a grep,
 # which is strictly worse than the grep not existing.
 check 7 "no app-owned authentication (§1 rule 7 - owning identity, not knowing the user)" \
-  grep -rniE "${EXCL[@]}" "password_hash|bcrypt|passlib|argon2|scrypt|session_cookie|set_cookie|jwt\.|jsonwebtoken|oauth2_password|login_required|CREATE TABLE users|def (login|signup|register)\b" "$BACKEND" "$FRONTEND_SRC"
+  grep -rniE "${EXCL[@]}" "password_hash|bcrypt|passlib|argon2|scrypt|session_cookie|set_cookie|jwt\.|jsonwebtoken|oauth2_password|login_required|CREATE TABLE users|def (login|logout|signin|sign_in|signup|sign_up|register|authenticate|verify_password|check_password)\b|(hashlib|sha256|sha512|sha1|md5)[^\n]{0,40}passw|passw[^\n]{0,40}(hashlib|sha256|sha512|sha1|md5)" "$BACKEND" "$FRONTEND_SRC"
 
 # ---------------------------------------------------------------------------
-# Security checks (8-12).
+# Security checks (8-13).
 #
 # §11 proves the app borrows credentials and AI correctly. It says nothing about
 # whether the app is injectable, whether a stray request can trigger something
@@ -105,8 +105,15 @@ check 7 "no app-owned authentication (§1 rule 7 - owning identity, not knowing 
 # against the wrong model on the very first category.
 # ---------------------------------------------------------------------------
 
+# Case-SENSITIVE on purpose, and it cost a round to learn why. Matching SQL
+# keywords case-insensitively made `card.update({` read as SQL UPDATE,
+# `draft_from_selection` as SELECT, and `f"Updated per request: {x}"` as both -
+# five false positives on an app that is actually clean. SQL keywords are
+# conventionally upper-case in queries and Python method names are not, so case
+# is the cheapest reliable separator. A query written in lower case is missed
+# here; the execute()-a-variable arm below catches it from the other end.
 check 8 "no injection into a live system (build queries and commands from parameters, never strings)" \
-  grep -rniE "${EXCL[@]}" "execute\(\s*(f[\"']|[\"'][^\"']*[\"']\s*[+%])|executemany\(\s*f[\"']|os\.system\(|shell\s*=\s*True|\beval\(|\bexec\(" "$BACKEND"
+  grep -rnE "${EXCL[@]}" "\b(SELECT|INSERT INTO|UPDATE|DELETE FROM)\b[^\"';]*(\{|\+\s*[a-z_]|%s|%\()|execute\([[:space:]]*[a-z_][a-z0-9_]*[[:space:]]*\)|os\.system\(|shell[[:space:]]*=[[:space:]]*True|\beval\(|\bexec\(" "$BACKEND"
 
 check 9 "no unescaped user content rendered as HTML (XSS)" \
   grep -rniE "${EXCL[@]}" "dangerouslySetInnerHTML|innerHTML\s*=|outerHTML\s*=|v-html|document\.write\(" "$FRONTEND_SRC"
@@ -133,6 +140,16 @@ check 11 "no wildcard CORS (every endpoint is already unauthenticated)" \
 check 12 "no secrets in logs or responses (§6, §8 - resolved values live in memory only)" \
   grep -rniE "${EXCL[@]}" "(print|[A-Za-z_]*log[A-Za-z_]*\.(debug|info|warn|warning|error|exception|critical))\(.*(api_key|apikey|api_token|secret|password|token|resolved|granted)" "$BACKEND"
 
+# A path or URL taken from the request lets a caller reach anything the container
+# can see - and in a VCA that includes every credential the platform injected.
+# This is the file-read cousin of the scope question below.
+#
+# Only request-derived names count. An earlier version also matched a bare `path`
+# or `url` argument, which fired on every `open(path)` in the app where `path`
+# was a local the code had just built itself - four hits, none of them real.
+check 13 "no request-controlled paths or URLs (traversal, SSRF)" \
+  grep -rniE "${EXCL[@]}" "(open|send_file|FileResponse|sendfile|os\.path\.join)\([^)]*\b(request|req|params|query_params|body|payload|user_input|untrusted)\b" "$BACKEND"
+
 echo
 echo "== not grep-able - check these by hand =="
 echo "  * Scope: can the app write outside what the admin granted? Take every endpoint"
@@ -150,10 +167,10 @@ echo "    unauthenticated request away from anyone on the network."
 
 echo
 if [ "$FAIL" -eq 0 ]; then
-  echo "All 12 checks passed with no matches. That is not the same as secure -"
+  echo "All 13 checks passed with no matches. That is not the same as secure -"
   echo "the hand-checked items above and a real audit still apply."
 else
   echo "One or more checks found matches that need human review (see above)."
-  echo "A match is not automatically a violation — e.g. check 5 is fine if every hit is inside vault_client.py's own httpx calls, or a value-access source's client using its declared manifest fields. Confirm each hit against the relevant §11 checklist item, or for checks 8-12 against references/security-audit-for-vcas.md."
+  echo "A match is not automatically a violation — e.g. check 5 is fine if every hit is inside vault_client.py's own httpx calls, or a value-access source's client using its declared manifest fields. Confirm each hit against the relevant §11 checklist item, or for checks 8-13 against references/security-audit-for-vcas.md."
 fi
 exit "$FAIL"
