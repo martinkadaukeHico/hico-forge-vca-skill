@@ -17,6 +17,9 @@ The reason this skill exists: an app built without these rules gets rewritten be
    - Does it depend on anything that only exists on someone's desktop (local Outlook, local files, a USB device, a locally-installed CLI)? Device-local resources don't exist in Forge (§2) — flag it and propose a server-side equivalent, or say the idea isn't Forge-compatible as described.
    - Does it want the model to browse, search, or take actions ("agentic" AI)? The broker is plain chat completions only (§5.3) — flag it rather than faking it with loops of completions. **This is narrower than it first reads, and reading it too broadly is the more common mistake.** What is forbidden is a loop in which *the model* decides what to do next. What is positively encouraged is deterministic orchestration *around* single completions: your code gathers the context, calls the broker once, parses the reply, applies the result, and decides in code whether another call is warranted. A feature that makes twenty completions is perfectly compliant if your code chose all twenty. If you find yourself thinking "any multi-step AI feature is banned, so I'll either give up or quietly build an agent" — both of those are wrong. Write the loop in Python.
    - Does it need a live external system (CRM, mailbox, another API)? You'll need that *system's real API docs* before writing the client for it (§4) — ask the user for them rather than guessing at endpoints and payload shapes. A guessed integration looks done and is actually broken.
+   - **Will it hold anything that belongs to one person rather than the team?** Someone's own drafts, HR cases, salary data, a personal mailbox, an audit trail naming individuals. A VCA runs on a shared team identity, so **everyone using the app sees everything the app can see** — there is no way to separate them in code, and adding one is rule 7's forbidden login by another name. Raise it now: sometimes the honest answer is that the app should not hold that data until Forge lends identity. Deciding this at the start costs a conversation; discovering it after the app is built costs the app.
+   - **Assume every endpoint is public inside the company.** A VCA has no app-level authentication at all, by design — there is no middleware to apply and none to forget. Anyone who can reach the container can call every URL it answers on. That is fine for a read-only view and worth pausing over for anything destructive.
+
    If the idea conflicts with a rule, say so and propose a compliant alternative out loud — never quietly build the noncompliant version because it's easier or the user didn't ask about Vault specifically.
 3. **Scaffold the repo per §3's layout.** Copy the reference implementations in `assets/backend/` into the new repo's `backend/` directory as your starting point rather than writing `vault_client.py` and `vault_mock.py` from scratch — they already encode the retry/error/status-code rules from §5.2 and §6 correctly, including the easy-to-get-wrong bits (retry once on 502 and never on 429, `VaultConfigError` vs. plain `VaultError`, mock refusing to start in prod). Adapt `assets/backend/ai_jobs.py` and `assets/manifest.example.json` to the app's actual jobs and sources — don't ship the placeholders as-is.
 4. **Write `CLAUDE.md` in the new repo's root as a byte-for-byte copy of `references/vca-master-prompt.md`.** This is what makes the rules durable across sessions: the next time Claude Code (yours or a colleague's) opens this repo, it reads `CLAUDE.md` automatically and inherits the same constraints, even without this skill triggering again. **Copy it verbatim — do not summarise it, do not replace its inline code listings with pointers to this skill's `assets/`.** The new repo does not contain this skill, so a pointer to `assets/backend/vault_client.py` is a dangling reference for everyone who opens that repo later. `references/vca-master-prompt.md` is kept identical to the platform team's `vault/docs/forge-vca-master-prompt.md` precisely so this copy is safe.
@@ -48,6 +51,25 @@ bash scripts/compliance_check.sh /path/to/the/repo
 ```
 
 This runs the seven greps from §11 (provider SDKs, provider hosts, model names, chokepoint integrity, unaccounted outbound HTTP, a secrets scan, and app-owned-auth signals) and prints PASS or REVIEW for each with the matching lines. A REVIEW hit is not automatically a violation — e.g. check 5 flags every `httpx`/`requests` call outside `vault_client.py`, which is expected and fine for a `value`-access source's own client (like a CRM client), as long as it's declared in `manifest.json` and only uses fields that source declares. Look at each hit and decide; don't just eyeball "no matches" as the only acceptable outcome, and don't wave through a hit without checking it against the corresponding rule in `references/vca-master-prompt.md` §11.
+
+**Then run a security audit — this is not optional, and compliance is not the
+same thing as security.** The §11 checks prove the app borrows credentials and AI
+correctly. They say nothing about whether it is injectable, whether a stray
+request can trigger something destructive, or whether it ships a dependency with
+a known exploit. Invoke the `vibe-code-security-audit` skill against the repo,
+and read its findings through **`references/security-audit-for-vcas.md`** before
+acting on any of them.
+
+That second step matters more than it sounds. A generic audit judges a VCA
+against the wrong model and gets the first category exactly backwards: it reports
+weak password hashing and recommends bcrypt, when a VCA must not have passwords
+at all. Someone following that advice in good faith builds a competent login and
+gets the app rejected at registration. **Authentication code in a VCA is a
+compliance failure whose fix is deletion, not hardening** — say that plainly
+rather than leaving them to infer it. The reference file maps every audit
+category onto this platform, including the two findings the generic checklist
+cannot express: whether the app can act outside what the admin granted, and
+whether it holds per-person data it cannot separate on a shared identity.
 
 Then walk the checklist in §11 of the reference doc — most of it isn't grep-able (does the app degrade feature-by-feature when a source is denied? does it actually crash on missing `VAULT_URL`? does mock mode show the banner?) and needs to be verified by actually running the app with `VAULT_MOCK=1` and then again with `VAULT_MOCK_PENDING`/`_DENIED`/`_MISSING` set, not just by reading the code.
 

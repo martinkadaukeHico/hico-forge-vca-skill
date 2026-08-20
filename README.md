@@ -1,12 +1,25 @@
 # HICO Group Skills — Claude Code plugin
 
-One skill today: **HICO Forge VCA compliance**.
+Two skills, meant to be used together.
 
-It loads itself whenever someone at HICO starts building an internal web app,
-tool, dashboard or prototype with Claude Code — including when the request never
-mentions Forge, Vault or VCA by name. Apps built without these rules have to be
-rewritten before they can run on the platform. HICO has already done that
-migration once; this is how we avoid doing it again.
+**`hico-forge-vca`** — loads itself whenever someone at HICO starts building an
+internal web app, tool, dashboard or prototype with Claude Code, including when
+the request never mentions Forge, Vault or VCA by name. Apps built without these
+rules have to be rewritten before they can run on the platform. HICO has already
+done that migration once; this is how we avoid doing it again.
+
+**`vibe-code-security-audit`** — audits an app for real vulnerabilities before it
+ships: injection, broken authorization, secrets, dependency CVEs. Written by
+HICO's security expert for AI-assisted apps generally, so it works on anything,
+not only Forge apps.
+
+**Compliance and security are not the same thing**, which is why both are here.
+The Forge rules prove an app borrows credentials and AI correctly; they say
+nothing about whether it is injectable. The audit catches that — but a generic
+audit judges a Forge app against the wrong model and gets its first category
+backwards, recommending bcrypt for an app that must not have passwords at all.
+`skills/hico-forge-vca/references/security-audit-for-vcas.md` reconciles the two,
+and the Forge skill routes through it automatically.
 
 This repo is both the **plugin** and its **marketplace**, so there is one URL to
 configure and nothing to host.
@@ -109,10 +122,15 @@ the skill's description — please report it rather than working around it.
 skills/
   hico-forge-vca/
     SKILL.md            the workflow and the judgement calls
-    references/         VCA Master Prompt v1.1 — the actual spec
+    references/
+      vca-master-prompt.md          the actual spec (v1.1)
+      security-audit-for-vcas.md    how to read an audit for a Forge app
     assets/backend/     reference vault_client.py, vault_mock.py, ai_jobs.py
     assets/             manifest.example.json
-    scripts/            compliance_check.sh — the §11 self-check
+    scripts/            compliance_check.sh — 12 checks, §11 plus security
+  vibe-code-security-audit/
+    SKILL.md            the audit procedure
+    references/         the checklist and the report format
 ```
 
 `references/vca-master-prompt.md` is kept byte-identical to the platform team's
